@@ -13,6 +13,7 @@ import os
 import struct
 import sys
 import time
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -48,15 +49,34 @@ def log(*parts):
     print(time.strftime("%H:%M:%S"), *parts, flush=True)
 
 
-def call(method, params, post=False):
+def multipart(fields, blobs):
+    """multipart/form-data: обычные поля строками, blobs — сырые байты (параметры rawbinary Web API).
+    hex-строка в urlencoded-форме Steam сохранил как текст, а не как байты (прогон 2026-10-06)."""
+    boundary = "----ppp" + uuid.uuid4().hex
+    body = b""
+    for name, value in fields.items():
+        body += f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode()
+    for name, data in blobs.items():
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{name}\"\r\n"
+                 f"Content-Type: application/octet-stream\r\n\r\n").encode() + data + b"\r\n"
+    body += f"--{boundary}--\r\n".encode()
+    return body, f"multipart/form-data; boundary={boundary}"
+
+
+def call(method, params, post=False, blobs=None):
     """запрос к Web API с повторами на сетевые ошибки и 5xx; ключ в ответах об ошибках не печатается."""
     params = dict(params, key=KEY, appid=APPID)
-    data = urllib.parse.urlencode(params).encode()
     url = f"{API}/{method}/"
     last = None
     for attempt in range(RETRIES):
         try:
-            req = urllib.request.Request(url, data=data) if post else urllib.request.Request(url + "?" + data.decode())
+            if blobs:
+                body, content_type = multipart(params, blobs)
+                req = urllib.request.Request(url, data=body, headers={"Content-Type": content_type})
+            elif post:
+                req = urllib.request.Request(url, data=urllib.parse.urlencode(params).encode())
+            else:
+                req = urllib.request.Request(url + "?" + urllib.parse.urlencode(params))
             with urllib.request.urlopen(req, timeout=60) as resp:
                 return json.loads(resp.read().decode())
         except urllib.error.HTTPError as e:
@@ -128,15 +148,24 @@ def compute(difficulty, ids):
     return result
 
 
-def details_hex(dps, pts):
+def details_bytes(dps, pts):
     values = [DETAILS_FORMAT] + list(dps) + [int(round(p * SCALE)) for p in pts] + [int(time.time())]
-    return struct.pack("<%di" % len(values), *values).hex()
+    return struct.pack("<%di" % len(values), *values)
+
+
+def details_valid(detail_hex):
+    """details записи в нашем формате (первый int — номер формата); мусор от прежнего способа записи — нет"""
+    try:
+        raw = bytes.fromhex(detail_hex or "")
+    except ValueError:
+        return False
+    return len(raw) >= 4 and struct.unpack("<i", raw[:4])[0] == DETAILS_FORMAT
 
 
 def set_score(board_id, steamid, score, details):
     base = {"leaderboardid": board_id, "steamid": steamid, "score": score, "scoremethod": "ForceUpdate"}
     try:
-        data = call("SetLeaderboardScore/v1", dict(base, details=details), post=True)
+        data = call("SetLeaderboardScore/v1", base, blobs={"details": details})
     except RuntimeError as e:
         # details в неожиданном формате — запись без них важнее
         log(f"  ! details отклонены ({e}), пишу без них")
@@ -159,7 +188,8 @@ def sync(difficulty, ids):
     board_id = ids[name]
     old = entries(board_id)
 
-    changed = [(sid, s) for sid, (s, _, _) in new.items() if old.get(sid, (None, ""))[0] != s]
+    changed = [(sid, s) for sid, (s, _, _) in new.items()
+               if old.get(sid, (None, ""))[0] != s or not details_valid(old.get(sid, (None, ""))[1])]
     stale = [sid for sid in old if sid not in new]
     log(f"  {name}: было {len(old)}, стало {len(new)}, изменить {len(changed)}, удалить {len(stale)}")
 
@@ -168,7 +198,7 @@ def sync(difficulty, ids):
         if VERBOSE or DRY:
             log(f"  {'[dry] ' if DRY else ''}{steamid}: {score / SCALE:.2f} очков  дпс {dps}  очки {[round(p, 1) for p in pts]}")
         if not DRY:
-            set_score(board_id, steamid, score, details_hex(dps, pts))
+            set_score(board_id, steamid, score, details_bytes(dps, pts))
     for steamid in stale:
         log(f"  {'[dry] ' if DRY else ''}удалить {steamid}: записей по боссам больше нет")
         if not DRY:
