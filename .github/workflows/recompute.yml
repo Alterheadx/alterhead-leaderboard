@@ -1,0 +1,43 @@
+name: recompute overall leaderboard
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: recompute
+  cancel-in-progress: false
+
+jobs:
+  recompute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: recompute
+        env:
+          STEAM_PUBLISHER_KEY: ${{ secrets.STEAM_PUBLISHER_KEY }}
+        run: python recompute.py
+
+      # GitHub отключает расписание через 60 дней без коммитов — раз в 20 дней коммитим метку
+      - name: keep schedule alive
+        run: |
+          now=$(date +%s)
+          last=$(cat last_run.txt 2>/dev/null || echo 0)
+          if [ $((now - last)) -gt $((20 * 24 * 3600)) ]; then
+            echo "$now" > last_run.txt
+            git config user.name "leaderboard-bot"
+            git config user.email "leaderboard-bot@users.noreply.github.com"
+            git add last_run.txt
+            git commit -m "метка запуска"
+            git push
+          fi
