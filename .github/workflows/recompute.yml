@@ -2,7 +2,8 @@ name: recompute overall leaderboard
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    # не ровно на :00/:10 — в эти минуты у GitHub очередь, и запуски по расписанию теряются
+    - cron: "3,13,23,33,43,53 * * * *"
   workflow_dispatch:
 
 permissions:
