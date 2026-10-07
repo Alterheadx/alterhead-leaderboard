@@ -1,24 +1,13 @@
-# Общий зачёт PigPonyPocalypse
+# PigPonyPocalypse overall ranking
 
-Скрипт раз в 10 минут (GitHub Actions) читает 8 таблиц ДПС по боссам в Steam, считает очки и пишет их
-в таблицы `Overall_5.1_Normal` и `Overall_5.2_Hard`. Игра в эти таблицы писать не может (`onlytrustedwrites`),
-она только показывает место игрока.
+Builds the overall ranking from the per-boss DPS leaderboards on Steam.
 
-Формула: за босса `100 × (ДПС игрока / ДПС первого места)^1.5`, общий счёт — сумма по четырём боссам,
-в Steam хранится как очки × 100. Когда кто-то ставит новый рекорд на боссе, очки остальных на нём падают при следующем пересчёте.
+Each boss gives up to 100 points: `100 × (your DPS / #1 DPS) ^ 1.5`.
+Your overall score is the sum over the four bosses of a difficulty, so Normal and Hard are ranked separately.
+When someone sets a new #1 on a boss, everyone else's points for that boss go down on the next update.
 
-## Настройка
-
-1. Секрет репозитория `STEAM_PUBLISHER_KEY` — ключ издателя Steamworks (Settings → Secrets and variables → Actions).
-2. Вкладка Actions → «recompute overall leaderboard» → Run workflow — первый запуск вручную, дальше по расписанию.
-
-Расписание GitHub неточное: при нагрузке запуск сдвигается на 10–30 минут. После 60 дней без коммитов GitHub
-отключает расписание, поэтому workflow сам коммитит `last_run.txt` раз в 20 дней.
-
-## Локально
+Runs on GitHub Actions. Needs the `STEAM_PUBLISHER_KEY` repository secret.
 
 ```bash
 STEAM_PUBLISHER_KEY=... python3 recompute.py --dry-run
 ```
-
-`--dry-run` только читает и печатает, что бы записал. Без флага пишет в Steam.

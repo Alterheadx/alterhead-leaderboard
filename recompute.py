@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Общий зачёт PigPonyPocalypse (Steam AppId 4385110).
+"""Overall ranking for PigPonyPocalypse (Steam app 4385110).
 
-За каждого босса игрок получает 100 × (его ДПС / ДПС первого места)^1.5 очков, общий счёт — сумма по четырём боссам
-сложности (максимум 400). В Steam счёт хранится целым: очки × 100. Таблицы Overall_5.1_Normal и Overall_5.2_Hard
-созданы с onlytrustedwrites — писать в них может только этот скрипт ключом издателя (STEAM_PUBLISHER_KEY).
+Per boss: 100 * (dps / top_dps) ** 1.5, summed over the four bosses of a difficulty.
+Stored on Steam as points * 100.
 
-Запуск: STEAM_PUBLISHER_KEY=... python3 recompute.py [--dry-run] [--verbose]
-  --dry-run — только читает таблицы и печатает, что бы записал.
+    STEAM_PUBLISHER_KEY=... python3 recompute.py [--dry-run] [--verbose]
 """
 import json
 import os
@@ -21,13 +19,13 @@ import urllib.request
 APPID = 4385110
 API = "https://partner.steam-api.com/ISteamLeaderboards"
 EXPONENT = 1.5
-MAX_POINTS = 100.0   # за первое место на боссе
-SCALE = 100          # счёт в Steam = очки × 100
-DETAILS_FORMAT = 1   # details записи: формат, ДПС по 4 боссам, очки × 100 по 4 боссам, время расчёта (unix)
+MAX_POINTS = 100.0   # for #1 on a boss
+SCALE = 100          # steam score = points * 100
+DETAILS_FORMAT = 1   # details: format, dps x4, points*100 x4, unix time
 PAGE = 1000
 RETRIES = 4
 
-# порядок прохождения; имя таблицы босса — как DPSLeaderbordManager.SteamLeaderboardName в игре
+# in play order
 BOSSES = ["ArcaneCorruptedPig", "SwyingSwyan", "BoarSentinel", "SwineKing"]
 DIFFICULTIES = {"Normal": 1, "Hard": 2}
 
@@ -50,8 +48,7 @@ def log(*parts):
 
 
 def multipart(fields, blobs):
-    """multipart/form-data: обычные поля строками, blobs — сырые байты (параметры rawbinary Web API).
-    hex-строка в urlencoded-форме Steam сохранил как текст, а не как байты (прогон 2026-10-06)."""
+    """multipart body; rawbinary params (details) have to go as raw bytes."""
     boundary = "----ppp" + uuid.uuid4().hex
     body = b""
     for name, value in fields.items():
@@ -64,7 +61,7 @@ def multipart(fields, blobs):
 
 
 def call(method, params, post=False, blobs=None):
-    """запрос к Web API с повторами на сетевые ошибки и 5xx; ключ в ответах об ошибках не печатается."""
+    """Web API call with retries on network errors and 5xx."""
     params = dict(params, key=KEY, appid=APPID)
     url = f"{API}/{method}/"
     last = None
@@ -87,7 +84,7 @@ def call(method, params, post=False, blobs=None):
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
             last = f"{method}: {e}"
         time.sleep(2 * (attempt + 1))
-    raise RuntimeError(f"Web API не ответил после {RETRIES} попыток: {last}")
+    raise RuntimeError(f"Web API failed after {RETRIES} attempts: {last}")
 
 
 def board_ids():
@@ -96,7 +93,7 @@ def board_ids():
 
 
 def entries(board_id):
-    """все записи таблицы: steamid → (score, details hex)."""
+    """steamid -> (score, details hex) for the whole board."""
     result = {}
     start = 1
     total = None
@@ -114,7 +111,7 @@ def entries(board_id):
             break
         start += PAGE
     if total and len(result) != total:
-        log(f"  ! таблица {board_id}: ожидалось {total} записей, прочитано {len(result)}")
+        log(f"  ! board {board_id}: expected {total} entries, read {len(result)}")
     return result
 
 
@@ -125,16 +122,16 @@ def points(dps, top):
 
 
 def compute(difficulty, ids):
-    """очки игроков сложности: steamid → (score, dps[4], points[4])."""
+    """steamid -> (score, dps[4], points[4]) for one difficulty."""
     per_boss = []
     for i in range(1, 5):
         name = boss_board(i, difficulty)
         if name not in ids:
-            raise RuntimeError(f"нет таблицы {name}")
+            raise RuntimeError(f"board {name} not found")
         board = entries(ids[name])
         top = max((s for s, _ in board.values()), default=0)
         per_boss.append((board, top))
-        log(f"  {name}: {len(board)} записей, лидер {top}")
+        log(f"  {name}: {len(board)} entries, top {top}")
 
     players = {}
     for i, (board, top) in enumerate(per_boss):
@@ -154,7 +151,7 @@ def details_bytes(dps, pts):
 
 
 def details_valid(detail_hex):
-    """details записи в нашем формате (первый int — номер формата); мусор от прежнего способа записи — нет"""
+    """True if details start with our format number."""
     try:
         raw = bytes.fromhex(detail_hex or "")
     except ValueError:
@@ -167,8 +164,8 @@ def set_score(board_id, steamid, score, details):
     try:
         data = call("SetLeaderboardScore/v1", base, blobs={"details": details})
     except RuntimeError as e:
-        # details в неожиданном формате — запись без них важнее
-        log(f"  ! details отклонены ({e}), пишу без них")
+        # fall back to writing the score without details
+        log(f"  ! details rejected ({e}), writing without them")
         data = call("SetLeaderboardScore/v1", base, post=True)
     res = data.get("result", {})
     if int(res.get("result", 0)) != 1:
@@ -184,23 +181,23 @@ def sync(difficulty, ids):
     new = compute(difficulty, ids)
     name = overall_board(difficulty)
     if name not in ids:
-        raise RuntimeError(f"нет таблицы {name}")
+        raise RuntimeError(f"board {name} not found")
     board_id = ids[name]
     old = entries(board_id)
 
     changed = [(sid, s) for sid, (s, _, _) in new.items()
                if old.get(sid, (None, ""))[0] != s or not details_valid(old.get(sid, (None, ""))[1])]
     stale = [sid for sid in old if sid not in new]
-    log(f"  {name}: было {len(old)}, стало {len(new)}, изменить {len(changed)}, удалить {len(stale)}")
+    log(f"  {name}: was {len(old)}, now {len(new)}, update {len(changed)}, remove {len(stale)}")
 
     for steamid, score in sorted(changed, key=lambda x: -x[1]):
         _, dps, pts = new[steamid]
         if VERBOSE or DRY:
-            log(f"  {'[dry] ' if DRY else ''}{steamid}: {score / SCALE:.2f} очков  дпс {dps}  очки {[round(p, 1) for p in pts]}")
+            log(f"  {'[dry] ' if DRY else ''}{steamid}: {score / SCALE:.2f} points  dps {dps}  per boss {[round(p, 1) for p in pts]}")
         if not DRY:
             set_score(board_id, steamid, score, details_bytes(dps, pts))
     for steamid in stale:
-        log(f"  {'[dry] ' if DRY else ''}удалить {steamid}: записей по боссам больше нет")
+        log(f"  {'[dry] ' if DRY else ''}remove {steamid}: no boss entries left")
         if not DRY:
             delete_score(board_id, steamid)
     return len(changed) + len(stale)
@@ -208,13 +205,13 @@ def sync(difficulty, ids):
 
 def main():
     if not KEY:
-        print("нет STEAM_PUBLISHER_KEY", file=sys.stderr)
+        print("STEAM_PUBLISHER_KEY is not set", file=sys.stderr)
         return 2
     ids = board_ids()
     total = 0
     for difficulty in DIFFICULTIES:
         total += sync(difficulty, ids)
-    log(f"готово: {total} правок{' (dry run)' if DRY else ''}")
+    log(f"done: {total} changes{' (dry run)' if DRY else ''}")
     return 0
 
 
