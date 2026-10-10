@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Overall ranking for PigPonyPocalypse (Steam app 4385110).
 
-Per boss: 100 * (dps / top_dps) ** 1.5, summed over the four bosses of a difficulty.
+Per boss: 100 * (dps / top_dps) ** 1.75, summed over the four bosses of a difficulty.
 Stored on Steam as points * 100.
 
     STEAM_PUBLISHER_KEY=... python3 recompute.py [--dry-run] [--verbose]
@@ -18,7 +18,7 @@ import urllib.request
 
 APPID = 4385110
 API = "https://partner.steam-api.com/ISteamLeaderboards"
-EXPONENT = 1.5
+EXPONENT = 1.75
 MAX_POINTS = 100.0   # for #1 on a boss
 SCALE = 100          # steam score = points * 100
 DETAILS_FORMAT = 1   # details: format, dps x4, points*100 x4, unix time
