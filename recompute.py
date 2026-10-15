@@ -189,18 +189,30 @@ def sync(difficulty, ids):
                if old.get(sid, (None, ""))[0] != s or not details_valid(old.get(sid, (None, ""))[1])]
     stale = [sid for sid in old if sid not in new]
     log(f"  {name}: was {len(old)}, now {len(new)}, update {len(changed)}, remove {len(stale)}")
+    skipped = 0
 
     for steamid, score in sorted(changed, key=lambda x: -x[1]):
         _, dps, pts = new[steamid]
         if VERBOSE or DRY:
             log(f"  {'[dry] ' if DRY else ''}{steamid}: {score / SCALE:.2f} points  dps {dps}  per boss {[round(p, 1) for p in pts]}")
         if not DRY:
-            set_score(board_id, steamid, score, details_bytes(dps, pts))
+            try:
+                set_score(board_id, steamid, score, details_bytes(dps, pts))
+            except RuntimeError as e:
+                # Steam refuses writes for accounts that no longer own the game (refunds): skip them
+                log(f"  ! skip {steamid}: {e}")
+                skipped += 1
+                try:
+                    delete_score(board_id, steamid)
+                except RuntimeError:
+                    pass
     for steamid in stale:
         log(f"  {'[dry] ' if DRY else ''}remove {steamid}: no boss entries left")
         if not DRY:
             delete_score(board_id, steamid)
-    return len(changed) + len(stale)
+    if skipped:
+        log(f"  {skipped} player(s) skipped")
+    return len(changed) + len(stale) - skipped
 
 
 def main():
